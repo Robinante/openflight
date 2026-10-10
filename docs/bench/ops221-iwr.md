@@ -167,6 +167,60 @@ software `7ed6f5d`, same trigger thresholds, no `--debug`:
   unsolicited IWR triggering. OPS capture/rearm, synchronized timestamps,
   sensor matching and shot accuracy remain untested on hardware.
 
+## Direct OPS captures and early-dump preservation (October 9-10)
+
+Human bench tests on software `7ed6f5d`, OPS 1.3.2, UART 230400 baud:
+
+- After a reboot, the desktop TrackMan kiosk restarted and owned the OPS UART.
+  Concurrent diagnostic access produced garbled replies and read errors. The
+  user stopped the kiosk and verified both radar ports were free before the
+  direct captures below. Earlier post-reboot readbacks are inconclusive.
+- Direct scripts configured a temporary 200 mph guard, set the final minimum
+  speed filter, cleared input before arming, then wrote the final ST threshold
+  and read continuously for 30 seconds. No S!, additional PA, IWR trigger, or
+  persistent-settings write was used. The scripts requested PI on exit.
+- The immediate "Receiving" message could be the ST acknowledgement, not the
+  capture. Host arrival timing was not recorded. These are one-shot tests,
+  not repeated-rearm validation or golf-shot acceptance.
+
+| Settings (mph / SM / S#) | Observation | File in `~/openflight_sessions` |
+| --- | --- | --- |
+| 5 / 25 / 6 | Stationary: complete I/Q dump | `ops-direct-trigger_20261009_233447.txt` |
+| 5 / 25 / 6 | Arm-wave attempt: complete dump; motion timing uncertain | `ops-direct-trigger_20261009_233607.txt` |
+| 25 / 25 / 6 | Only ST acknowledgement in 30 seconds | `ops-direct-trigger-25mph_20261009_234537.txt` |
+| 20 / 20 / 4 | Stationary: complete I/Q dump | `ops-vendor-baseline_20261009_235202.txt` |
+| 20 / 25 / 4 | Stationary: complete dump reported by user | `ops-20mph-sm25-s4_20261010_000411.txt` |
+
+The first three uploaded dumps (both 5 mph runs and the SM20 run) contain valid
+JSON and 4096 samples per channel, without ADC clipping. Offline mean-removed,
+Hann-windowed complex FFT analysis at 30 ksps shows recurring low-frequency
+structure near 2.34 mph equivalent. The SM20 run's I standard deviation was
+94.0 ADC counts versus 33.7 in the first stationary run; Q was 44.3 versus
+41.4. The signal changed as well as the settings; no physical noise source or
+firmware fault has been established. Both 20 mph configurations triggered
+without deliberate movement. One quiet 25 mph interval is not a false-trigger
+rate measurement.
+
+OPS AN-027-C specifies 30 ksps for golf and a default SM20. OPS golf-test notes
+quoted in PR221 use a 20 mph example and suggest S#4 after observing excess
+prehistory with S#8. Combining these is a guidance-based baseline, not a fully
+documented vendor test preset. PR221 separately reports testing 25 mph, SM25,
+and S#6; experimental defaults remain unchanged.
+
+Code regression: input resets after initial ST arming, after rearming, and at
+entry to the wait loop could delete an already-arriving capture. Simulated
+immediate dumps were discarded at both arming points before the fix. The
+internal-trigger path now preserves pending bytes and lets the existing
+capture-boundary detector discard command replies. Sound-trigger waits retain
+their previous input-clearing behavior. History-fill waits now run under the
+temporary guard, before the final ST command, avoiding deliberate post-arm
+delays while UART data can accumulate. This fixes a demonstrated software
+data-loss path, not the unexplained physical idle triggers.
+
+Validation: 578 targeted tests passed, one skipped (missing fixture), covering
+OPS, rolling-buffer strategies, independent triggers, and server integration.
+Real-Pi validation of this preservation change and repeated rearming is pending.
+
 ## Hardware and fallback
 
 - Target: Pi 5, OPS243-A firmware 1.3.2 on `/dev/ttyAMA0` at 230400 baud,

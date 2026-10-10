@@ -814,6 +814,32 @@ class _RestoreRaceSerial(_InternalTriggerSerial):
         return super().write(data)
 
 
+class _ImmediateTriggerSerial(_InternalTriggerSerial):
+    """Queue a dump as soon as the final threshold is written."""
+
+    def __init__(self):
+        super().__init__()
+        self.pending = bytearray()
+
+    @property
+    def in_waiting(self):
+        return len(self.pending)
+
+    def reset_input_buffer(self):
+        self.pending.clear()
+
+    def read(self, size):
+        result = bytes(self.pending[:size])
+        del self.pending[:size]
+        return result
+
+    def write(self, data):
+        if data == b"ST-25\r":
+            self.pending.extend(b'{"trigger_velocity":-25}\r\n')
+            self.pending.extend(b"".join(TestWaitForHardwareTrigger._DUMP))
+        return super().write(data)
+
+
 class TestInternalSpeedTrigger:
     """Focused tests for the OPS243 board-managed speed trigger."""
 
@@ -822,6 +848,62 @@ class TestInternalSpeedTrigger:
         radar = OPS243Radar.__new__(OPS243Radar)
         radar.serial = serial_obj
         return radar
+
+    @pytest.mark.parametrize("operation", ["configure", "rearm"])
+    def test_immediate_dump_survives_arming_and_wait(self, monkeypatch, operation):
+        radar = self._radar(_ImmediateTriggerSerial())
+        monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(
+            radar,
+            "_send_command",
+            lambda command: '{"Version":"1.3.2"}' if command == "?V" else "",
+        )
+        if operation == "configure":
+            radar.configure_for_internal_speed_trigger()
+        else:
+            radar._internal_speed_trigger_config = (25.0, 6, 25, 30)
+            assert radar.rearm_internal_speed_trigger()
+
+        assert b'{"sample_time"' in radar.serial.pending
+        response = radar.wait_for_hardware_trigger(timeout=0.1, preserve_pending=True)
+        assert response == b"".join(TestWaitForHardwareTrigger._DUMP).decode("ascii")
+        assert radar.serial.in_waiting == 0
+
+    def test_wait_preserves_queued_internal_capture(self):
+        radar = self._radar(_ImmediateTriggerSerial())
+        radar.serial.write(b"ST-25\r")
+
+        response = radar.wait_for_hardware_trigger(timeout=0.1, preserve_pending=True)
+
+        assert response == b"".join(TestWaitForHardwareTrigger._DUMP).decode("ascii")
+
+    @pytest.mark.parametrize("operation", ["configure", "rearm"])
+    def test_arming_does_not_sleep_while_dump_is_pending(self, monkeypatch, operation):
+        radar = self._radar(_ImmediateTriggerSerial())
+
+        def sleep_before_capture(_seconds):
+            assert not radar.serial.pending, "UART dump must be read without a post-arm sleep"
+
+        monkeypatch.setattr(time, "sleep", sleep_before_capture)
+        monkeypatch.setattr(
+            radar,
+            "_send_command",
+            lambda command: '{"Version":"1.3.2"}' if command == "?V" else "",
+        )
+        if operation == "configure":
+            radar.configure_for_internal_speed_trigger()
+        else:
+            radar._internal_speed_trigger_config = (25.0, 6, 25, 30)
+            assert radar.rearm_internal_speed_trigger()
+
+        assert b'{"sample_time"' in radar.serial.pending
+
+    def test_default_wait_still_discards_stale_sound_data(self):
+        radar = self._radar(_ImmediateTriggerSerial())
+        radar.serial.write(b"ST-25\r")
+
+        assert radar.wait_for_hardware_trigger(timeout=0.01) == ""
+        assert radar.serial.in_waiting == 0
 
     def test_configuration_uses_gc_trigger_order_and_six_pre_segments(self, monkeypatch):
         """Internal trigger setup must restore GC-reset settings in order."""

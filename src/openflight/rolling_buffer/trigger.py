@@ -752,7 +752,7 @@ class HardwareTriggeredCapture(_ClockSyncedCapture):
             timeout,
         )
 
-        response = radar.wait_for_hardware_trigger(timeout=timeout)
+        response = radar.wait_for_hardware_trigger(timeout=timeout, preserve_pending=True)
         if not response:
             logger.info("[TRIGGER] OPS hardware trigger timeout — no dump received")
             return None

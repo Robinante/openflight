@@ -604,6 +604,7 @@ class TestHardwareTriggeredCapture:
         result = trigger.wait_for_trigger(radar, processor, timeout=1.0)
 
         assert result is capture
+        radar.wait_for_hardware_trigger.assert_called_once_with(timeout=1.0, preserve_pending=True)
         processor.parse_capture.assert_called_once_with(
             '{"Q": [1]}',
             first_byte_timestamp=12345.678,

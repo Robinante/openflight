@@ -27,7 +27,7 @@ The host configures the radar once and then waits for the radar’s completed ro
    then raise the temporary guard to `ST-200` while the remaining settings are
    written: 128 samples, `X=2`, outbound filtering, JSON plus magnitude output,
    and the configured `S#n` split.
-5. Restore the magnitude gate `SMn`, then restore the requested `ST-n` last and allow the 4,096-sample history to fill.
+5. Restore the magnitude gate `SMn` and allow the 4,096-sample history to fill while the temporary threshold guard remains active. Restore the requested `ST-n` last, then read without clearing pending bytes or adding a post-arm delay.
 6. Wait for the board-triggered dump, parse the I/Q payload, and reject it if it has no outbound ball-speed reading at or above 35 mph.
 7. Re-arm with the same temporary guard around `GC`, restore the cached settings, and wait for the buffer to fill again. A serial write timeout keeps the capture and reports a retryable re-arm failure instead of discarding the shot.
 

@@ -1543,6 +1543,7 @@ class OPS243Radar:
         dump_grace: Optional[float] = None,
         cancel_event: Optional[threading.Event] = None,
         on_first_byte: Optional[Callable[[], None]] = None,
+        preserve_pending: bool = False,
     ) -> str:
         """
         Wait for hardware trigger to fire and read the buffer dump.
@@ -1561,6 +1562,7 @@ class OPS243Radar:
             cancel_event: Stops an idle wait promptly during shutdown. Once a
                 dump has started, it is allowed to finish normally.
             on_first_byte: Called once when a hardware-triggered dump begins.
+            preserve_pending: Keep bytes already queued by an autonomous trigger.
 
         Returns:
             Raw response string containing JSON lines, or empty string on timeout
@@ -1571,8 +1573,8 @@ class OPS243Radar:
         if dump_grace is None:
             dump_grace = self.transfer_budget_s(floor=8.0)
 
-        # Clear any stale data
-        self.serial.reset_input_buffer()
+        if not preserve_pending:
+            self.serial.reset_input_buffer()
 
         response_lines = []
         idle_bytes = bytearray()
@@ -1854,10 +1856,7 @@ class OPS243Radar:
             sample_rate_ksps,
         )
         self._restore_internal_speed_trigger_settings()
-        self.serial.reset_input_buffer()
 
-        # A 4,096-sample buffer takes about 136.5 ms at 30 ksps.
-        time.sleep(0.3)
         logger.info(
             "[OPS] Internal speed trigger armed (ST%s, S#%d, S=%d, SM%d)",
             signed_threshold,
@@ -1896,9 +1895,12 @@ class OPS243Radar:
         # ST/SM require a terminating carriage return and are deliberately
         # sent after MPH is restored so the threshold is interpreted in mph.
         self.serial.write(f"SM{trigger_magnitude}\r".encode("ascii"))
+        self.serial.flush()
+        # Fill history while guarded. After ST, return directly to the reader:
+        # an immediate dump must not be cleared or left to fill the UART buffer.
+        time.sleep((4096 / (sample_rate_ksps * 1000)) + 0.05)
         self.serial.write(f"ST{signed_threshold}\r".encode("ascii"))
         self.serial.flush()
-        time.sleep(0.1)
 
     def rearm_internal_speed_trigger(self, sample_rate_ksps: int = 30) -> bool:
         """Re-arm an internal hardware trigger after a completed dump.
@@ -1924,7 +1926,6 @@ class OPS243Radar:
             time.sleep(0.15)
             self._send_internal_trigger_threshold(self.INTERNAL_TRIGGER_GUARD_THRESHOLD)
             self._restore_internal_speed_trigger_settings()
-            self.serial.reset_input_buffer()
         except serial.SerialTimeoutException as error:
             self._hardware_trigger_recovery_required = True
             logger.warning(
@@ -1934,7 +1935,6 @@ class OPS243Radar:
             )
             return False
 
-        time.sleep((4096 / (sample_rate_ksps * 1000)) + 0.05)
         logger.info("[OPS] Internal speed trigger re-armed (GC)")
         return True
 
