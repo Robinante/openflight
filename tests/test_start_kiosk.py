@@ -71,6 +71,13 @@ def test_camera_shot_analysis_is_a_standalone_kiosk_camera_mode():
     assert "if has_camera_arg; then" in script
 
 
+def test_hardware_trigger_speed_alias_passes_through_to_server():
+    """The thin wrapper forwards the documented threshold alias unchanged."""
+    arguments = ["--trigger", "hardware", "--trigger-speed", "10"]
+
+    assert _dry_run(*arguments) == ["openflight-server", "--web-port", "8080", *arguments]
+
+
 @pytest.mark.parametrize("alias", ["--radar-port", "--ops-port"])
 def test_radar_alias_is_distinct_from_web_port(alias):
     assert _dry_run(alias, "/dev/serial0", "--port", "9090") == [
