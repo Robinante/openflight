@@ -87,11 +87,44 @@ TrackMan results. Retain the session JSONL and console debug output; inspect
 unmatched captures, timing source/offset, false triggers and repeated rearming.
 Verify the installed IWR firmware against this Cormac checkout before running.
 
+## Pi checkpoint: IWR firmware flashed (2026-10-09, EDT)
+
+User-provided Pi terminal output confirms:
+
+- Software checked out at `7ed6f5d`; saved Pi Python setting, executable bits
+  and bench log restored with `git stash apply` (stash retained).
+- Before flashing: IWR 1.0.2, Git `1d23e2fdfab1`, built
+  `2026-10-01T19:20:08Z`. Server/kiosk stopped and `/dev/ttyUSB0` unowned.
+- ROM bootloader probe passed. Flashed the bundled Cormac image
+  `firmware/releases/openflight_iwr6843_v1.0.3.bin`, 518,660 bytes.
+- SHA256: `ef03570c4a0d3b94de556935b799ca3cef92e01b9f3b7a8882966d1696baebc1`.
+- ROM bootloader verified the completed write. After returning to functional
+  mode, the board reported **1.0.3, Git `4e4e9c5d94b7`, hybrid-cadence,
+  built `2026-10-09T15:58:05Z`**.
+- Camera and display disconnected while replacing the radar front. Next run
+  uses the server directly over SSH. OPS firmware has not been changed.
+- This verifies firmware installation only. Independent triggering, capture
+  association, repeated rearming and TrackMan accuracy are still untested.
+
+Headless startup (keep console evidence alongside session JSONL):
+
+```bash
+mkdir -p ~/openflight_sessions
+uv run --frozen openflight-server \
+  --host 0.0.0.0 --web-port 8080 \
+  --port /dev/ttyAMA0 --ops-baud 230400 \
+  --trigger hardware --trigger-threshold 25 --trigger-magnitude 25 \
+  --pre-trigger-segments 6 \
+  --iwr6843 --iwr6843-port /dev/ttyUSB0 --iwr6843-self-trigger \
+  --debug --session-location ops221-independent-bench \
+  2>&1 | tee -a ~/openflight_sessions/ops221-independent-startup.log
+```
+
 ## Hardware and fallback
 
 - Target: Pi 5, OPS243-A firmware 1.3.2 on `/dev/ttyAMA0` at 230400 baud,
   IWR6843LEVM on `/dev/ttyUSB0`.
-- Installed IWR firmware must be confirmed before hardware testing. A Git
+- Installed Cormac IWR firmware confirmed in the Pi checkpoint above. A Git
   checkout does not flash either sensor.
 - Jamorro fallback: software at `2a895d65decb7e659ccb2520f847ef2d7289a180`
   with its own matching IWR binary. Cormac and Jamorro both label different
