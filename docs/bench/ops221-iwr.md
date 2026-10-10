@@ -145,6 +145,28 @@ and IWR driver/monitor files are unchanged from Cormac `12d6205` in this
 experiment. Next comparison: same settings without `--debug`, location
 `ops221-independent-idle-no-debug`. No firmware or threshold change yet.
 
+## Idle comparison without debug: IWR release/rearm succeeded
+
+User-provided console log, 2026-10-09 23:01:42 through 23:03:17 EDT,
+software `7ed6f5d`, same trigger thresholds, no `--debug`:
+
+- 27 numbered IWR captures, each followed by successful `l3release` rearm.
+  Capture bookkeeping took 0.01 s (one took 0.02 s); raw readback was disabled.
+  No release timeout or radar recovery restart appears in the supplied output.
+- One earlier, unaccepted IWR trigger was released while OPS initialized.
+- OPS produced three ordinary 30-second no-dump timeouts and no capture.
+  IWR triggers therefore still did not force an OPS capture.
+- IWR triggered throughout the run. The user waved an arm near the end,
+  reporting an off-axis position about 3-4 ft from OPS; the exact movement
+  timestamps were not marked. The denser late trigger cluster cannot be
+  attributed conclusively to that motion.
+- No onboard metric-result lines appeared. An `onboard result only` capture
+  message is not evidence of a valid shot or even a populated result packet.
+- Removing debug eliminated the observed rearm failures in this comparison,
+  strengthening the full-readback-path hypothesis. It did not eliminate
+  unsolicited IWR triggering. OPS capture/rearm, synchronized timestamps,
+  sensor matching and shot accuracy remain untested on hardware.
+
 ## Hardware and fallback
 
 - Target: Pi 5, OPS243-A firmware 1.3.2 on `/dev/ttyAMA0` at 230400 baud,
