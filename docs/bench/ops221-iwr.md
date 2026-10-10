@@ -230,8 +230,8 @@ and `radar_raw_20261010_001333.log` in `~/openflight_sessions`.
 
 ## IWR overnight investigation (October 10)
 
-The repeated unsolicited triggers remain unresolved. No physical IWR capture
-from this bench run was available locally for replay. The previously recorded
+At the overnight checkpoint, repeated unsolicited triggers remained unresolved
+and no physical IWR capture from this bench run was available locally for replay. The previously recorded
 no-debug run eliminated the full-dump release errors, but still generated
 unwanted triggers. Neither this experiment nor its tests establish hardware
 readiness for TrackMan.
@@ -272,12 +272,106 @@ latch. That is consistent with the debug-only release timeout, but has not
 been confirmed with a firmware patch on hardware. Continue bench validation
 without `--debug`; the constant-trigger problem still needs actual evidence.
 
-Next evidence to collect: the existing `.l3dump` files from the 22:51 debug
+The next evidence requested was the existing `.l3dump` files from the 22:51 debug
 run in `~/openflight_sessions/iwr6843`, together with its startup log. These
 may expose the physical signal behind the triggers without another firmware
 flash. A patched no-debug run should show either `Onboard result: ...` or
 the explicit not-ready warning before rearming. A quiet idle interval and
 several successive real shots are still required before calling this fixed.
+
+## Morning bench results and TrackMan preparation (October 10)
+
+Times below are the Pi's local time (America/New_York). Tested software:
+`a6eb5ac7` on `bench/ops221-iwr-2026-10-09`. OPS firmware is 1.3.2;
+IWR firmware is 1.0.3, git `4e4e9c5d94b7`, built October 9 at 15:58:05Z.
+
+### Replay of the actual bench captures
+
+The user supplied `iwr-trigger-evidence.tar.gz`, containing the startup log
+and three 733,301-byte IWR dumps from October 9 at 22:51:19, 22:51:29 and
+22:51:38. All decode as 24 frames, 36 chirps, four RX, 53 range bins and a
+2 ms frame period. These raw files have not been added to the repository.
+
+Replay used the compiled C detection code, tee bin 36, a six-bin tee band
+and the logged SNR setting. Applying the repository reference calibration
+also preserved the trigger outcomes below. Replay starts from the retained
+capture, not the board's complete preceding detector history.
+
+| Trigger SNR (linear multiplier) | Bench captures firing in replay | 20-swing comparison |
+| --- | --- | --- |
+| 1.0 | 2 of 3 | 20 triggered |
+| 1.25 | 0 of 3 | 20 triggered, same frames as 1.0 |
+| 1.5 | 0 of 3 | 20 triggered, same frames as 1.0 |
+
+The two reproduced events fired the club range-crossing rule on frame 6.
+Their fitted range speeds were approximately 50 and 55 m/s, formed from
+weak tracked returns; neither replay produced a ball track. These are
+detector interpretations, not measured golf swings or an identified physical
+interference source. The first capture's original trigger did not reproduce.
+The positive comparison used the existing August 24 corpus of twenty
+24-frame captures with tee bin 38, six-bin band, stop-at-fire and
+post-impact processing disabled. Detection parity is not accuracy validation.
+
+### Pi tests with independent triggers
+
+- The desktop boot launcher still used `--trigger sound --debug`. It was
+  stopped, and both serial ports were verified free before testing.
+- At 09:25, startup failed on IWR `sensorStop` with a self-trigger freeze
+  timeout, before the new SNR was applied. A physical IWR RESET cleared the
+  condition; no firmware was reflashed.
+- SNR 1.25: six IWR captures appeared in the first approximately 90 seconds.
+  All returned onboard results and successfully rearmed through `l3release`.
+  This did not establish a quiet idle baseline; motion was not precisely
+  annotated for that run. OPS reported no dumps.
+- SNR 1.5: the user explicitly marked a still interval from 09:32:31 to
+  09:33:31 with zero IWR captures. During waving from approximately 09:33:31
+  to 09:34:07, three captures appeared at 09:34:03.888, 09:34:06.489 and
+  09:34:07.275. Results were invalid, invalid and partial; each completed in
+  0.04-0.05 seconds and rearmed successfully. The following still interval
+  through 09:35:01 was quiet. OPS remained quiet throughout.
+
+This supports using SNR 1.5 for the next field experiment. It does not prove
+false triggers eliminated or golf-shot sensitivity. The approximately
+33-second wait during waving is not a measured processing latency. OPS
+30-second timeout messages mean no capture, not an OPS trigger event.
+
+Evidence under `~/openflight_sessions`:
+`ops-iwr-snr125.log`, `session_20261010_092638_ops-iwr-snr125.jsonl`,
+`ops-iwr-snr150.log`, `session_20261010_092931_ops-iwr-snr150.jsonl`,
+and their `radar_raw_20261010_092638.log` / `radar_raw_20261010_092931.log` logs.
+
+### Prepared boot configuration
+
+At 09:40 the user updated the Pi-local `~/.config/labwc/autostart` after
+backing it up as `autostart.bak-20261010-094036`. Its launcher now uses:
+
+```bash
+exec env OPENFLIGHT_UV_RUN_ARGS=--no-sync bash ./scripts/start-kiosk.sh \
+  --radar-port /dev/ttyAMA0 --ops-baud 230400 \
+  --trigger hardware --trigger-threshold 20 --trigger-magnitude 25 \
+  --pre-trigger-segments 4 \
+  --iwr6843 --iwr6843-port /dev/ttyUSB0 \
+  --iwr6843-self-trigger --iwr6843-self-trigger-snr 1.5 \
+  --camera-capture --ble --session-location trackman
+```
+
+Mock mode and `--debug` are absent. The kiosk syncs the camera and BLE extras;
+`--no-sync` on its subsequent `uv run` preserves that prepared environment.
+The user successfully ran `uv sync --frozen --extra camera --extra ble` and
+imported `picamera2`, `cv2` and `bless`. That verifies dependency availability,
+not camera operation or BLE advertising. Camera and display were still to be
+reconnected, with power removed, during enclosure reassembly.
+
+Camera capture follows IWR trigger notifications in this configuration.
+BLE supports shot delivery, club/profile selection and power status in this
+branch; its command dispatcher does not expose IWR calibration. Use the kiosk
+for setup/calibration. Camera defaults request 640x400 at 300 fps; achieved
+capture rate and saved clips must be checked after reconnecting the hardware.
+
+Remaining gates: verify the new boot command after reassembly, repeat the
+stationary check, confirm actual camera captures and phone BLE connection,
+then check several separated real shots against TrackMan for detection,
+sensor association and measurements. No TrackMan acceptance is claimed.
 
 ## Hardware and fallback
 
@@ -294,6 +388,8 @@ several successive real shots are still required before calling this fixed.
 ## Assistance
 
 Codex resolved the merge, implemented independent trigger routing and shared
-clock synchronization, and ran the automated checks above. Human code review
-and real hardware/TrackMan validation remain pending; these results are not
+clock synchronization, implemented the IWR result wait, analyzed the supplied
+captures, and ran the automated checks above. The user performed the reported
+Pi bench tests and launcher update. Human code review, post-reassembly checks
+and real-shot TrackMan validation remain pending; these results are not full
 hardware acceptance.
