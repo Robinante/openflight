@@ -120,6 +120,31 @@ uv run --frozen openflight-server \
   2>&1 | tee -a ~/openflight_sessions/ops221-independent-startup.log
 ```
 
+## First idle startup: initialization passed, IWR rearm failed
+
+User-provided output from 2026-10-09 22:51 EDT, software `7ed6f5d`:
+
+- Camera/display disconnected; radars loose, supported upright on a coffee
+  table and reportedly aimed away from moving objects. This is not an aligned
+  golf setup or a controlled RF environment.
+- IWR 1.0.3 and OPS 1.3.2 initialized. OPS armed at ST-25 / S#6 / S=30 /
+  SM25; server logged independent triggers with no IWR-to-OPS S! forwarding.
+- IWR produced three unsolicited captures, each 733,301 bytes in about 7.10 s.
+  Each was followed by `l3release` reporting `self-trigger freeze timed out`.
+  Two recovery restarts completed in the supplied log; the run was interrupted
+  with Ctrl+C during the third recovery.
+- OPS reported no dump during its first 30-second wait despite the IWR
+  activity. This supports trigger isolation, not OPS capture/rearm acceptance.
+- Capture matching and OPS per-shot clock synchronization were not exercised.
+
+Code review lead, not a hardware-confirmed cause: Cormac's `--debug` forces
+full IWR `l3dump` readback. That path uses `l3_stopCaptureAtBoundary` and
+`l3_trigRearm`, whereas `l3release` uses `l3_awaitFrozenRing`, which explicitly
+consumes the freeze completion and clears `gSelfTriggerLatched`. The firmware
+and IWR driver/monitor files are unchanged from Cormac `12d6205` in this
+experiment. Next comparison: same settings without `--debug`, location
+`ops221-independent-idle-no-debug`. No firmware or threshold change yet.
+
 ## Hardware and fallback
 
 - Target: Pi 5, OPS243-A firmware 1.3.2 on `/dev/ttyAMA0` at 230400 baud,
