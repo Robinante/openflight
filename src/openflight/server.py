@@ -1421,11 +1421,6 @@ def init_iwr6843(
             board_calibration=board_calibration,
             veto_no_ball=veto_no_ball,
         )
-        if self_trigger is not None:
-            logger.warning(
-                "[IWR6843] Self-trigger drives the OPS with S!. Disconnect the "
-                "SEN-14262 GATE from OPS HOST_INT, or both will trigger it."
-            )
         iwr6843_runtime = IWR6843Runtime(
             capture_monitor=capture_monitor,
             calibration=calibration,
@@ -2834,6 +2829,13 @@ def _check_self_trigger_latency(shot: Shot, capture) -> None:
     segments = getattr(getattr(monitor, "trigger", None), "pre_trigger_segments", None)
     sample_rate_ksps = getattr(monitor, "sample_rate_ksps", None)
     latency_ms = (capture.trigger_timestamp - shot.impact_timestamp) * 1000.0
+    if getattr(monitor, "trigger_type", None) == "hardware":
+        logger.info(
+            "[SERVER] Independent IWR notice minus OPS impact: %.1f ms "
+            "(capture association offset, not S! latency)",
+            latency_ms,
+        )
+        return
     if segments is None or not sample_rate_ksps:
         logger.info("[SERVER] Self-trigger impact -> S!: %.1f ms", latency_ms)
         return
@@ -4652,7 +4654,13 @@ def start_monitor(
             # anchor K-LD7 correlation to the OPS trigger_time instead of the
             # USB first-byte arrival time.
             radar = getattr(monitor, "radar", None)
-            if not swing_speed_mode and radar is not None and hasattr(radar, "read_clock_sync"):
+            # Hardware mode is already armed; defer C? until a dump leaves it idle.
+            if (
+                not swing_speed_mode
+                and trigger_type != "hardware"
+                and radar is not None
+                and hasattr(radar, "read_clock_sync")
+            ):
                 try:
                     clock_sync = radar.read_clock_sync()
                     session_logger.log_clock_sync(
@@ -4700,7 +4708,13 @@ def start_monitor(
         )
         if iwr6843_runtime is not None:
             capture_monitor = iwr6843_runtime.capture_monitor
-            if capture_monitor.watch_self_trigger:
+            if capture_monitor.watch_self_trigger and trigger_type == "hardware":
+                logger.info("[SERVER] OPS and IWR self-trigger independently; IWR sends no S!")
+            elif capture_monitor.watch_self_trigger:
+                logger.warning(
+                    "[IWR6843] Self-trigger drives the OPS with S!. Disconnect the "
+                    "SEN-14262 GATE from OPS HOST_INT, or both will trigger it."
+                )
                 ops_radar = getattr(monitor, "radar", None)
                 if ops_radar is None or not hasattr(ops_radar, "request_capture"):
                     raise RuntimeError("IWR6843 self-trigger needs an OPS radar that accepts S!")
@@ -5494,7 +5508,8 @@ def main():
         "--iwr6843-self-trigger",
         action="store_true",
         help="Freeze the IWR ring when the firmware club track is predicted to cross "
-        "the tee's range and send S! to the OPS, instead of the sound-gate edge. The "
+        "the tee's range. With --trigger sound, send S! to the OPS; with "
+        "--trigger hardware, both radars trigger independently. The "
         "bin it watches is --iwr6843-self-trigger-bin",
     )
     parser.add_argument(
@@ -5821,8 +5836,8 @@ def main():
         )
     if args.iwr6843_veto_no_ball and not args.iwr6843_self_trigger:
         parser.error("--iwr6843-veto-no-ball requires --iwr6843-self-trigger")
-    if self_trigger_config is not None and args.trigger != "sound":
-        parser.error("--iwr6843-self-trigger drives the OPS with S!; use --trigger sound")
+    if self_trigger_config is not None and args.trigger not in ("sound", "hardware"):
+        parser.error("--iwr6843-self-trigger: use --trigger sound or --trigger hardware")
     if args.camera_capture and (
         args.camera_capture_width <= 0
         or args.camera_capture_height <= 0

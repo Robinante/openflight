@@ -209,6 +209,7 @@ class RollingBufferMonitor:
         self.trigger_type = trigger_type
         self.sample_rate_ksps = sample_rate_ksps
         self.trigger = create_trigger(trigger_type, **trigger_kwargs)
+        self._hardware_radar_info: dict = {}
 
         self._running = False
         self._capture_thread: Optional[threading.Thread] = None
@@ -235,6 +236,7 @@ class RollingBufferMonitor:
         self.radar.connect()
 
         if self.trigger_type == "hardware":
+            self._hardware_radar_info = self.radar.get_info()
             self.radar.configure_for_internal_speed_trigger(
                 trigger_threshold_mph=self.trigger.trigger_threshold_mph,
                 pre_trigger_segments=self.trigger.pre_trigger_segments,
@@ -294,6 +296,8 @@ class RollingBufferMonitor:
 
     def get_radar_info(self) -> dict:
         """Get radar module information."""
+        if self.trigger_type == "hardware":
+            return dict(self._hardware_radar_info)
         return self.radar.get_info()
 
     def start(

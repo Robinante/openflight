@@ -320,58 +320,13 @@ class SpeedTriggeredCapture(TriggerStrategy):
         return self._last_trigger_speed
 
 
-class SoundTrigger(TriggerStrategy):
-    """
-    Hardware sound trigger using SparkFun SEN-14262.
-
-    IMPORTANT: Rolling buffer mode must be configured BEFORE using this trigger.
-    Call radar.configure_for_rolling_buffer() or radar.enter_rolling_buffer_mode()
-    before calling wait_for_trigger().
-
-    Wiring: SEN-14262 GATE → OPS243-A J3 Pin 3 (HOST_INT)
-    The GATE output goes HIGH on loud sound (club impact).
-    OPS243-A uses rising edge detection on HOST_INT as trigger.
-
-    No software trigger (S!) needed — the radar triggers itself
-    via hardware. We just need to wait for data to appear on serial.
-
-    """
-
-    # What starts the OPS dump, and so what the logs call it: the SEN-14262
-    # gate on HOST_INT, or the IWR6843 self-trigger sending S! (the OPS side
-    # waits on its port the same way for both).
-    SOURCE_LABELS = {"sound": "Sound trigger", "iwr6843": "IWR6843 self-trigger"}
+class _ClockSyncedCapture(TriggerStrategy):
+    """Shared OPS timestamp mapping while a completed capture is idle."""
 
     CLOCK_SYNC_SAMPLES = 36
     CLOCK_SYNC_MAX_ROLLOVER_UNCERTAINTY_MS = 40.0
     CLOCK_SYNC_MAX_TIMEOUT_READ_MS = 50.0
     CLOCK_SYNC_MAX_FALLBACK_AGE_S = 60.0
-
-    def __init__(
-        self,
-        pre_trigger_segments: int = 12,
-        source: str = "sound",
-    ):
-        """
-        Initialize sound trigger.
-
-        Args:
-            pre_trigger_segments: Number of pre-trigger segments for S# command.
-                Each segment = 128 samples = ~4.27ms at 30ksps.
-                Default 12 gives ~51ms pre-trigger, ~85ms post-trigger.
-                NOTE: This is passed to enter_rolling_buffer_mode() by the caller.
-                The trigger does NOT configure rolling buffer mode itself.
-            source: What fires the dump, a key of SOURCE_LABELS. With
-                "iwr6843" the idle wait and its timeout (every ``timeout``
-                seconds with nothing happening) are logged at debug.
-        """
-        super().__init__(pre_trigger_segments=pre_trigger_segments)
-        if source not in self.SOURCE_LABELS:
-            raise ValueError(
-                f"Unknown trigger source: {source!r}. Valid: {sorted(self.SOURCE_LABELS)}"
-            )
-        self.source = source
-        self.label = self.SOURCE_LABELS[source]
 
     @staticmethod
     def _clock_sync_last_read_host_time(clock_sync: dict) -> Optional[float]:
@@ -572,6 +527,55 @@ class SoundTrigger(TriggerStrategy):
 
         return selection_log
 
+
+class SoundTrigger(_ClockSyncedCapture):
+    """
+    Hardware sound trigger using SparkFun SEN-14262.
+
+    IMPORTANT: Rolling buffer mode must be configured BEFORE using this trigger.
+    Call radar.configure_for_rolling_buffer() or radar.enter_rolling_buffer_mode()
+    before calling wait_for_trigger().
+
+    Wiring: SEN-14262 GATE → OPS243-A J3 Pin 3 (HOST_INT)
+    The GATE output goes HIGH on loud sound (club impact).
+    OPS243-A uses rising edge detection on HOST_INT as trigger.
+
+    No software trigger (S!) needed — the radar triggers itself
+    via hardware. We just need to wait for data to appear on serial.
+
+    """
+
+    # What starts the OPS dump, and so what the logs call it: the SEN-14262
+    # gate on HOST_INT, or the IWR6843 self-trigger sending S! (the OPS side
+    # waits on its port the same way for both).
+    SOURCE_LABELS = {"sound": "Sound trigger", "iwr6843": "IWR6843 self-trigger"}
+
+    def __init__(
+        self,
+        pre_trigger_segments: int = 12,
+        source: str = "sound",
+    ):
+        """
+        Initialize sound trigger.
+
+        Args:
+            pre_trigger_segments: Number of pre-trigger segments for S# command.
+                Each segment = 128 samples = ~4.27ms at 30ksps.
+                Default 12 gives ~51ms pre-trigger, ~85ms post-trigger.
+                NOTE: This is passed to enter_rolling_buffer_mode() by the caller.
+                The trigger does NOT configure rolling buffer mode itself.
+            source: What fires the dump, a key of SOURCE_LABELS. With
+                "iwr6843" the idle wait and its timeout (every ``timeout``
+                seconds with nothing happening) are logged at debug.
+        """
+        super().__init__(pre_trigger_segments=pre_trigger_segments)
+        if source not in self.SOURCE_LABELS:
+            raise ValueError(
+                f"Unknown trigger source: {source!r}. Valid: {sorted(self.SOURCE_LABELS)}"
+            )
+        self.source = source
+        self.label = self.SOURCE_LABELS[source]
+
     def wait_for_trigger(
         self,
         radar: "OPS243Radar",
@@ -707,7 +711,7 @@ class SoundTrigger(TriggerStrategy):
         pass  # No state to reset
 
 
-class HardwareTriggeredCapture(TriggerStrategy):
+class HardwareTriggeredCapture(_ClockSyncedCapture):
     """Capture using the OPS243's internal speed trigger."""
 
     def __init__(
@@ -761,12 +765,28 @@ class HardwareTriggeredCapture(TriggerStrategy):
         )
         capture = None
         parse_error = None
+        summary = None
+        valid_outbound = []
         started_at = time.time()
         try:
             capture = processor.parse_capture(
                 response,
                 first_byte_timestamp=first_byte_timestamp,
             )
+            if capture is not None:
+                if first_byte_timestamp is not None and capture.first_byte_timestamp is None:
+                    capture.first_byte_timestamp = float(first_byte_timestamp)
+                summary = self._summarize_capture_activity(processor, capture)
+                valid_outbound = [
+                    speed
+                    for speed in summary["all_outbound_speeds"]
+                    if speed >= self.min_ball_speed_mph
+                ]
+                if valid_outbound:
+                    # C? must finish while idle, before GC can start another dump.
+                    self._select_clock_sync_for_capture(radar, capture)
+                    if capture.trigger_timestamp is None:
+                        capture.apply_trigger_timestamp_from_first_byte()
         except Exception as error:  # pylint: disable=broad-exception-caught
             parse_error = error
             logger.warning("[TRIGGER] Hardware capture parse failed: %s", error, exc_info=True)
@@ -790,10 +810,6 @@ class HardwareTriggeredCapture(TriggerStrategy):
             )
             return None
 
-        summary = self._summarize_capture_activity(processor, capture)
-        valid_outbound = [
-            speed for speed in summary["all_outbound_speeds"] if speed >= self.min_ball_speed_mph
-        ]
         if not valid_outbound:
             self._append_activity_diagnostic(
                 summary,

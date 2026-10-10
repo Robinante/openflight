@@ -33,15 +33,59 @@ Personal experiment on `Robinante/openflight`, branch
   difference in PR #221's `ops243.py`; left unchanged.
 - No radar, camera, Pi kiosk, power or TrackMan testing performed for this checkpoint.
 
-## Next checkpoint
+## Checkpoint 2: independent OPS and IWR triggers
 
-`--trigger hardware` adds OPS self-trigger support, but combining it with
-`--iwr6843-self-trigger` is still rejected by the existing CLI guard. Do not
-remove that guard alone: the IWR observer currently sends `S!` to the OPS.
+- Allows `--trigger hardware --iwr6843 --iwr6843-self-trigger`.
+  IWR captures and rearms its own ring without sending `S!` to OPS.
+  The existing `--trigger sound` + IWR software-trigger behavior is retained.
+- Shares Cormac's clock-sync selection with OPS internal-trigger captures:
+  fresh qualified sync, then a qualified saved sync no older than 60 seconds,
+  then first-byte timing. Clock queries finish before OPS rearm; rejected
+  captures skip synchronization. Startup information is read before arming,
+  and startup clock queries are deferred until a completed dump leaves OPS idle.
+- Keeps the existing nearest-capture matcher (within +/-0.75 seconds, consumed
+  once). Tests cover stale captures, nearest selection and future captures.
+  This is time-based association, not proof that two detections are one swing:
+  false triggers inside the window and missing captures need TrackMan validation.
+  IWR timestamps remain host receipt times for firmware notices; only OPS has
+  this clock mapping. The shot's `impact_timestamp` remains its OPS trigger
+  anchor; the separate FFT impact estimate is not substituted in this experiment.
+- Debug logs label the independent timing offset separately from `S!` latency.
+  Existing JSONL captures retain OPS timing source/offset and IWR notice times.
+- Camera autonomous triggering is not implemented. No firmware was flashed.
 
-Next work: separate that observer from independent IWR detection, verify
-timestamp handling and capture association, then test on the Pi. Camera
-self-trigger is not implemented by this merge.
+### Validation (development container only)
+
+- Ten new tests cover CLI acceptance, trigger isolation, sound-mode preservation,
+  startup query ordering, clock fallback/rearm ordering and capture association.
+  The initial checks reproduced seven failures; a later startup-query regression
+  also failed before its fix. Existing rejection tests now assert no clock query.
+- `uv run pytest tests/test_independent_triggers.py tests/test_ops243.py tests/test_rolling_buffer.py tests/test_server.py tests/test_iwr6843_monitor.py -q --tb=short`:
+  680 passed, one missing-session-fixture skip.
+- `uv run pytest tests/test_start_kiosk.py tests/test_iwr6843_runtime_club.py -q --tb=short -k 'not test_stop_kiosk_browser_kills_the_launched_tree_and_spares_other_instances'`:
+  66 passed; the one deselected kiosk test has the baseline timeout documented above.
+- Four hardware-trigger tests rerun after adding rejection assertions.
+- Ruff lint and format checks passed for the changed implementation and new tests.
+- `uv run pylint src/openflight/ --fail-under=9`: 9.76/10.
+- No Pi, radar, camera or TrackMan validation yet.
+
+### Planned bench command (after firmware verification)
+
+```bash
+bash ./scripts/start-kiosk.sh \
+  --radar-port /dev/ttyAMA0 --ops-baud 230400 \
+  --trigger hardware --trigger-threshold 25 --trigger-magnitude 25 \
+  --pre-trigger-segments 6 \
+  --iwr6843 --iwr6843-port /dev/ttyUSB0 --iwr6843-self-trigger \
+  --debug --session-location ops221-independent-bench
+```
+
+This uses real sensors, no mock/BLE/camera flags. The OPS path from PR #221 sets
+P0 (full transmit power), 30 ksps, S#6 (~25.6 ms before the trigger), and accepts
+outbound captures at least 35 mph. These are initial bench settings, not tuned
+TrackMan results. Retain the session JSONL and console debug output; inspect
+unmatched captures, timing source/offset, false triggers and repeated rearming.
+Verify the installed IWR firmware against this Cormac checkout before running.
 
 ## Hardware and fallback
 
@@ -57,6 +101,7 @@ self-trigger is not implemented by this merge.
 
 ## Assistance
 
-Codex resolved the merge, adapted trigger option routing, and ran the automated
-checks above. Human code review and real hardware/TrackMan validation remain
-pending; these results are not hardware acceptance.
+Codex resolved the merge, implemented independent trigger routing and shared
+clock synchronization, and ran the automated checks above. Human code review
+and real hardware/TrackMan validation remain pending; these results are not
+hardware acceptance.

@@ -623,6 +623,7 @@ class TestHardwareTriggeredCapture:
         assert trigger.wait_for_trigger(radar, processor, timeout=1.0) is None
         radar.rearm_internal_speed_trigger.assert_called_once_with(30)
         assert trigger.drain_diagnostics()[0]["reason"] == "no_ball_speed"
+        radar.read_clock_sync.assert_not_called()
 
     def test_rearms_after_malformed_dump(self):
         """Malformed board output cannot leave the internal trigger idle."""
@@ -636,6 +637,7 @@ class TestHardwareTriggeredCapture:
         assert trigger.wait_for_trigger(radar, processor, timeout=1.0) is None
         radar.rearm_internal_speed_trigger.assert_called_once_with(30)
         assert trigger.drain_diagnostics()[0]["reason"] == "parse_failed"
+        radar.read_clock_sync.assert_not_called()
 
     def test_retains_valid_capture_when_rearm_reports_busy_radar(self):
         """A re-arm failure is recoverable and does not discard the received shot."""
