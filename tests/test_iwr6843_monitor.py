@@ -607,6 +607,50 @@ def test_unreadable_firmware_result_never_costs_the_capture(tmp_path, caplog):
     monitor.stop()
 
 
+def test_self_trigger_waits_for_result_before_releasing_ring(tmp_path):
+    """Triggered precedes the post-impact frames and their result packet."""
+    radar = SelfTriggerRadar(_raw_dump())
+    result = SimpleNamespace(shot_id=3, verdict="valid", club_points=4, ball_points=9)
+    replies = iter([None, None, result])
+
+    def delayed_result():
+        assert radar.releases == 0, "release discards the pending result"
+        return next(replies)
+
+    radar.shot_result = delayed_result
+    radar.stats_replies = [FROZEN_STATS]
+    monitor = _started(tmp_path, radar, readback=False)
+    try:
+        capture = _self_triggered_capture(monitor, radar)
+        assert capture is not None
+        assert capture.onboard_result is result
+        assert _wait_until(lambda: radar.releases == 1)
+    finally:
+        monitor.stop()
+
+
+def test_result_wait_expires_without_releasing_or_reading_ring(tmp_path, monkeypatch, caplog):
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _self_trigger_monitor(tmp_path, radar)
+    # Exercise the deadline deterministically without real sleeping.
+    clock = SimpleNamespace(now=0.0)
+
+    def sleep(seconds):
+        clock.now += seconds
+
+    monkeypatch.setattr(
+        "openflight.iwr6843.monitor.time",
+        SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep),
+    )
+    with caplog.at_level(logging.WARNING):
+        assert monitor._read_onboard_result() is None
+    assert 1 < radar.result_reads < 30
+    assert clock.now <= 0.3
+    assert radar.releases == 0
+    assert radar.read_started_at is None
+    assert "Onboard result not ready" in caplog.text
+
+
 def test_sound_triggered_captures_carry_the_firmware_result(tmp_path):
     """The onboard result is the shot's angle source, so a GPIO edge reads it too."""
     radar = SelfTriggerRadar(_raw_dump())

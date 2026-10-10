@@ -40,6 +40,10 @@ _GRACEFUL_DUMP_SHUTDOWN_S = 12.0
 _LISTENER_ERROR_BACKOFF_S = 0.5
 # Between attempts to rearm the board after a capture (l3release, else a restart).
 _REARM_RETRY_BACKOFF_S = 0.5
+# Triggered is emitted before the post-impact tail; allow its result to finish
+# before any readback/release resets it. Serial command timeouts still apply.
+_RESULT_WAIT_S = 0.25
+_RESULT_POLL_S = 0.02
 # The board's state in a ``stats`` reply: a capture running, the trigger latched.
 _STATS_ACTIVE = re.compile(r"\bactive=(\d+)")
 _STATS_LATCHED = re.compile(r"\blatched=(\d+)")
@@ -902,12 +906,21 @@ class IWR6843CaptureMonitor:
     def _read_onboard_result(self):
         """The firmware's result packet for this shot, or None.
 
-        Read before the readback because l3track/l3sparse rearm the ring at
-        the end, which resets the result. A failure here never costs the
-        capture: it is logged and the shot goes on without onboard metrics.
+        Wait briefly for the post-impact frames, then read before readback:
+        l3track/l3sparse and l3release reset the result when they rearm. A
+        failure never costs the capture; it goes on without onboard metrics.
         """
+        deadline = time.monotonic() + _RESULT_WAIT_S
         try:
-            result = self.radar.shot_result()
+            while True:
+                result = self.radar.shot_result()
+                if result is not None:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.warning("[IWR6843] Onboard result not ready before readback/rearm")
+                    return None
+                time.sleep(min(_RESULT_POLL_S, remaining))
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("[IWR6843] Onboard result unreadable: %s", exc)
             return None

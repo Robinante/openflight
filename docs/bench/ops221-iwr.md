@@ -219,7 +219,65 @@ data-loss path, not the unexplained physical idle triggers.
 
 Validation: 578 targeted tests passed, one skipped (missing fixture), covering
 OPS, rolling-buffer strategies, independent triggers, and server integration.
-Real-Pi validation of this preservation change and repeated rearming is pending.
+The user then validated `a81bff5` on the Pi at 00:13 on October 10, with
+20 mph / SM25 / S#4 and IWR disabled. OpenFlight received 41,035 bytes,
+reported GC rearming, and rejected the capture because it contained no
+outbound speed >=35 mph. Three subsequent 30-second waits were quiet.
+This confirms one integrated receive/reject/rearm cycle; a second capture
+after rearming and golf-shot accuracy remain untested. Evidence:
+`ops221-preserve-20mph.log`, `session_20261010_001333_ops221-preserve-20mph.jsonl`,
+and `radar_raw_20261010_001333.log` in `~/openflight_sessions`.
+
+## IWR overnight investigation (October 10)
+
+The repeated unsolicited triggers remain unresolved. No physical IWR capture
+from this bench run was available locally for replay. The previously recorded
+no-debug run eliminated the full-dump release errors, but still generated
+unwanted triggers. Neither this experiment nor its tests establish hardware
+readiness for TrackMan.
+
+One separate host race was reproduced and fixed: the firmware emits
+`Triggered` before collecting the post-impact tail and setting result
+`ready=1`. The host previously queried the result once, then read/released
+the ring even when the reply was `ready=0`. That loses the eventual onboard
+result and can explain missing metrics, but is not established as the cause
+of the firmware's unwanted trigger decisions. The host now retries not-ready
+results at 20 ms intervals within a 250 ms budget. Existing per-command serial
+timeouts still apply; a stalled command can exceed that polling budget.
+Unreadable or persistently absent results still allow capture/rearm and log
+a warning. No firmware binary, trigger sensitivity, calibration, or shot
+acceptance threshold was changed. No reflash is needed for this host fix.
+
+Validation:
+
+- Both new regressions failed before the fix: delayed results were lost,
+  and not-ready replies were never retried. All 110 monitor tests now pass.
+- Driver, independent-trigger, and compiled firmware replay suites: 200 passed,
+  four failed. The same four recording-expectation failures reproduce on an
+  isolated checkout of `a81bff5`: one minimum club-point expectation, two
+  post-impact club-track cases, and one late-trigger expectation. They are
+  not fixed or weakened in this change.
+- Ruff lint and formatting checks pass for the changed Python files.
+  Monitor pylint scores 9.97/10 (existing module size/argument warnings).
+- A bounded synthetic-noise experiment exercised the compiled C replay path:
+  seeds 0-3, 800 frames each, 2 ms period, 36 chirps, four RX, 53 bins starting
+  at bin 20, independent Gaussian I/Q sigma 30; tee bin 36, band six bins,
+  SNR 1 and 4. None of the eight runs fired. This short, idealized noise model
+  does not cover the board's interference, structured clutter, or scheduling;
+  it does not justify changing sensitivity.
+
+Source inspection also found that full `l3dump` uses a different freeze/rearm
+path from `l3release`: its chained-ring restart does not clear the self-trigger
+latch. That is consistent with the debug-only release timeout, but has not
+been confirmed with a firmware patch on hardware. Continue bench validation
+without `--debug`; the constant-trigger problem still needs actual evidence.
+
+Next evidence to collect: the existing `.l3dump` files from the 22:51 debug
+run in `~/openflight_sessions/iwr6843`, together with its startup log. These
+may expose the physical signal behind the triggers without another firmware
+flash. A patched no-debug run should show either `Onboard result: ...` or
+the explicit not-ready warning before rearming. A quiet idle interval and
+several successive real shots are still required before calling this fixed.
 
 ## Hardware and fallback
 
