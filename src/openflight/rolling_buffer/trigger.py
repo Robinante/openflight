@@ -738,12 +738,15 @@ class HardwareTriggeredCapture(_ClockSyncedCapture):
         self.min_ball_speed_mph = float(min_ball_speed_mph)
         self.trigger_magnitude = trigger_magnitude
         self.sample_rate_ksps = sample_rate_ksps
+        self.rearm_pending = False
 
     def wait_for_trigger(
         self,
         radar: "OPS243Radar",
         processor: RollingBufferProcessor,
         timeout: float = 30.0,
+        cancel_event: Optional[threading.Event] = None,
+        capture_started_callback: Optional[Callable[[], None]] = None,
     ) -> Optional[IQCapture]:
         """Wait for one internal-trigger dump and return a valid capture."""
         logger.info(
@@ -752,8 +755,13 @@ class HardwareTriggeredCapture(_ClockSyncedCapture):
             timeout,
         )
 
+        wait_options = {}
+        if cancel_event is not None:
+            wait_options["cancel_event"] = cancel_event
+        if capture_started_callback is not None:
+            wait_options["on_first_byte"] = capture_started_callback
         response = radar.wait_for_hardware_trigger(
-            timeout=timeout, preserve_pending=True, detect_orphaned_dump=True
+            timeout=timeout, preserve_pending=True, detect_orphaned_dump=True, **wait_options
         )
         if not response:
             if getattr(radar, "last_hardware_trigger_orphaned_dump", False) is True:
@@ -839,8 +847,11 @@ class HardwareTriggeredCapture(_ClockSyncedCapture):
 
     def _rearm(self, radar: "OPS243Radar") -> bool:
         """Re-arm after a dump without discarding captures on serial failure."""
+        self.rearm_pending = True
         try:
-            return radar.rearm_internal_speed_trigger(self.sample_rate_ksps)
+            rearmed = radar.rearm_internal_speed_trigger(self.sample_rate_ksps)
+            self.rearm_pending = not rearmed
+            return rearmed
         except Exception as error:  # pylint: disable=broad-exception-caught
             logger.warning("[TRIGGER] Internal trigger re-arm failed: %s", error, exc_info=True)
             return False

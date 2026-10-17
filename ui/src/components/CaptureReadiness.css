@@ -1,0 +1,44 @@
+.capture-readiness {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid currentColor;
+  font-size: 0.8rem;
+  line-height: 1.25;
+}
+
+.capture-readiness strong {
+  flex-shrink: 0;
+  font-size: 1rem;
+}
+
+.capture-readiness__devices {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capture-readiness__recording {
+  margin-left: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.capture-readiness--ready {
+  color: var(--color-success);
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.capture-readiness--busy {
+  color: var(--color-warning);
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.capture-readiness--error {
+  color: var(--color-danger);
+  background: rgba(248, 113, 113, 0.1);
+}

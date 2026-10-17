@@ -495,6 +495,7 @@ class IWR6843CaptureMonitor:
         # while that runs are refused as busy. A restart repeats start()'s
         # configuration (kept here) and then runs the restart hooks.
         self._rearming = False
+        self._listener_error = False
         self._sensor_configured = False
         self._config_lines: list[str] | None = None
         self._onboard_track_config: str | None = None
@@ -658,6 +659,21 @@ class IWR6843CaptureMonitor:
         board: what was set after start (the ball detector's ``ball cfg``) is
         set again. A failing hook is logged and does not undo the rearm."""
         self._restart_hooks.append(hook)
+
+    def capture_status(self) -> str:
+        """Report host capture activity without adding serial traffic."""
+        if not self._running or self._worker is None or not self._worker.is_alive():
+            return "unavailable"
+        with self._condition:
+            if self._listener_error:
+                return "error"
+            if self._rearming or self._release_pending:
+                return "recovering"
+            if self._capture_active or self._edge_pending:
+                return "capturing"
+            if self._job_active:
+                return "processing"
+            return "waiting" if self._armed else "starting"
 
     def _board_armed(self) -> bool:
         """A capture running and, with the self-trigger, not latched.
@@ -910,7 +926,9 @@ class IWR6843CaptureMonitor:
                 pass
             try:
                 self._listen_for_self_trigger()
+                self._listener_error = False
             except Exception:  # pylint: disable=broad-exception-caught
+                self._listener_error = True
                 # Keep the worker alive: it still owns captures and jobs.
                 logger.warning("[IWR6843] Self-trigger listener error", exc_info=True)
                 time.sleep(_LISTENER_ERROR_BACKOFF_S)
@@ -1068,7 +1086,6 @@ class IWR6843CaptureMonitor:
             onboard_only=not self.readback,
         )
         with self._condition:
-            self._capture_active = False
             self._captures.append(capture)
             self._condition.notify_all()
         logger.info(
@@ -1079,7 +1096,12 @@ class IWR6843CaptureMonitor:
         )
         # Always, success or not: a readback that failed can leave the ring
         # frozen or the capture stopped, and then nothing fires again.
-        self._ensure_armed()
+        try:
+            self._ensure_armed()
+        finally:
+            with self._condition:
+                self._capture_active = False
+                self._condition.notify_all()
 
     def capture_for_shot(
         self,

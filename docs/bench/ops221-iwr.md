@@ -472,6 +472,32 @@ one previously confirmed Windows path assertion deselected. The sensor
 readout above is real Pi evidence; running the new sign option on the Pi
 and verifying the resulting correction remain pending.
 
+## October 17: capture readiness in the kiosk
+
+Live now shows a persistent READY / WAIT / DISCONNECTED strip, with OPS,
+IWR and camera states and an explicit Raw IWR on label. Host capture,
+processing, serial work, re-arming, worker errors and stopped workers
+prevent green readiness. Polling uses an HTTP snapshot every 500 ms,
+does not issue radar commands and clears the display to CHECKING RADARS
+if updates fail. This reports host readiness, not a separate RF health test.
+The IWR capture remains busy through its final re-arm check. OPS hardware
+waits now report their first byte and accept shutdown cancellation, as the
+sound path already did; a failed OPS re-arm stays marked recovering.
+
+Backend radar/server/readiness/camera checks: 672 passed, one missing-fixture
+skip and the previously confirmed Windows path assertion deselected.
+Later inclinometer/server checks: 373 passed with the same skip/exclusion.
+UI: 263 unit tests, type-check, production build and changed-file lint passed.
+Browser tests passed at 800x400, 800x480 and 1024x600, covering busy, recovery,
+restored readiness, failed polling and visible metrics; the smallest screenshot
+was visually inspected. These browser checks used a simulated backend.
+Pylint for all changed implementation modules: 9.80/10. Physical capture and
+recovery indications still require confirmation after updating the Pi.
+
+The kiosk Record/Stop recording button changes debug logging, not the IWR
+monitor's startup readback setting. Start with `--debug` and leave it enabled
+for this raw-recording session. Runtime switching of IWR readback was not added.
+
 ## Hardware and fallback
 
 - Target: Pi 5, OPS243-A firmware 1.3.2 on `/dev/ttyAMA0` at 230400 baud,

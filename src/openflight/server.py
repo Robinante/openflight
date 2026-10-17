@@ -1074,6 +1074,38 @@ def static_files(path):
     return send_from_directory(app.static_folder, path)
 
 
+@app.route("/api/capture-status")
+def api_capture_status():
+    """Summarize worker readiness; never query a radar from the HTTP thread."""
+    devices = {}
+    if not mock_mode:
+        devices["OPS"] = (
+            monitor.capture_status()
+            if monitor and hasattr(monitor, "capture_status")
+            else "unavailable"
+        )
+    capture_monitor = iwr6843_runtime.capture_monitor if iwr6843_runtime else None
+    if capture_monitor is not None:
+        devices["IWR"] = capture_monitor.capture_status()
+    elif iwr6843_runtime_config.get("enabled") or iwr6843_runtime_config.get("error"):
+        devices["IWR"] = "unavailable"
+    if camera_capture_runtime is not None:
+        camera = camera_capture_runtime.status()
+        devices["Camera"] = (
+            "waiting"
+            if camera.get("armed")
+            else ("capturing" if camera.get("running") else "unavailable")
+        )
+    elif camera_capture_config.get("enabled") or camera_capture_config.get("error"):
+        devices["Camera"] = "unavailable"
+    return {
+        "ready": bool(devices) and all(state == "waiting" for state in devices.values()),
+        "devices": devices,
+        "raw_iwr": bool(capture_monitor and capture_monitor.save_dumps),
+        "mock": mock_mode,
+    }
+
+
 @app.route("/api/shutdown", methods=["POST"])
 def api_shutdown():
     """Cleanly shut down the server via REST API."""

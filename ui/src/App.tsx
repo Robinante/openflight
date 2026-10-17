@@ -13,6 +13,7 @@ import { DebugPanel } from './components/DebugPanel';
 import { DisplayMode } from './components/DisplayMode';
 import { SimShotBadges } from './components/SimShotBadges';
 import { SetupBanner } from './components/SetupBanner';
+import { CaptureReadiness } from './components/CaptureReadiness';
 import { OnboardMetrics } from './components/OnboardMetrics';
 import { ShotProcessingArea } from './components/ShotProcessingArea';
 import { ShutdownDialog, type ShutdownState } from './components/ShutdownDialog';
@@ -285,6 +286,7 @@ function AppContent() {
       )}
 
       {currentView === 'live' ? <SetupBanner status={iwrSetup} /> : null}
+      {currentView === 'live' ? <CaptureReadiness /> : null}
 
       {showShutdown ? (
         <ShutdownDialog state={shutdownState} onConfirm={handleShutdown} onCancel={closeShutdown} />

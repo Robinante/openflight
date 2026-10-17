@@ -212,6 +212,7 @@ class RollingBufferMonitor:
         self._hardware_radar_info: dict = {}
 
         self._running = False
+        self._capture_state = "starting"
         self._capture_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._shot_callback: Optional[Callable[[Shot], None]] = None
@@ -347,6 +348,16 @@ class RollingBufferMonitor:
                 self._capture_thread = None
         logger.info("[MONITOR] Rolling buffer monitor stopped")
 
+    def capture_status(self) -> str:
+        """Read the worker state without interrupting the radar serial port."""
+        if not self._running or self._capture_thread is None or not self._capture_thread.is_alive():
+            return "unavailable"
+        if self.trigger_type not in ("sound", "hardware"):
+            return "unavailable"
+        if getattr(self.trigger, "rearm_pending", False) is True:
+            return "recovering"
+        return self._capture_state
+
     def _notify_processing(self, state: str) -> None:
         """Report shot-processing lifecycle without letting UI errors break capture."""
         if not self._processing_callback:
@@ -446,6 +457,8 @@ class RollingBufferMonitor:
             trigger_latency_ms = 0.0
             try:
                 trigger_start = time.time()
+                if self._capture_state != "error":
+                    self._capture_state = "waiting"
 
                 # Wait for trigger and capture
                 # Use a long timeout so sound/hardware triggers can wait
@@ -460,9 +473,10 @@ class RollingBufferMonitor:
                 def on_capture_started() -> None:
                     nonlocal capture_started
                     capture_started = True
+                    self._capture_state = "capturing"
                     self._notify_processing("capturing")
 
-                if self.trigger_type == "sound":
+                if self.trigger_type in ("sound", "hardware"):
                     trigger_kwargs["cancel_event"] = self._stop_event
                     trigger_kwargs["capture_started_callback"] = on_capture_started
                 capture = self.trigger.wait_for_trigger(**trigger_kwargs)
@@ -481,6 +495,7 @@ class RollingBufferMonitor:
                     continue
 
                 # Process capture (FFT + speed/spin extraction)
+                self._capture_state = "processing"
                 self._notify_processing("calculating")
                 process_start = time.time()
                 processed = self.processor.process_capture(
@@ -719,6 +734,7 @@ class RollingBufferMonitor:
                 self.trigger.reset()
 
             except Exception as e:
+                self._capture_state = "error"
                 self._notify_processing("failed")
                 logger.error("[MONITOR] Capture loop error: %s", e, exc_info=True)
                 if capture is not None and not trigger_event_recorded:

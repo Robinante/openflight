@@ -1735,6 +1735,31 @@ def test_restart_hooks_run_after_a_restart(tmp_path):
     monitor.stop()
 
 
+def test_capture_stays_busy_until_final_rearm_has_finished(tmp_path):
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _started(tmp_path, radar)
+    rearm_started = threading.Event()
+    finish_rearm = threading.Event()
+    original_rearm = monitor._ensure_armed
+
+    def blocked_rearm():
+        rearm_started.set()
+        finish_rearm.wait(timeout=2.0)
+        original_rearm()
+
+    monitor._ensure_armed = blocked_rearm
+    try:
+        capture = _self_triggered_capture(monitor, radar)
+        assert capture is not None and capture.valid
+        assert rearm_started.wait(timeout=1.0)
+        assert monitor.capture_status() == "capturing"
+        finish_rearm.set()
+        assert _wait_until(lambda: monitor.capture_status() == "waiting")
+    finally:
+        finish_rearm.set()
+        monitor.stop()
+
+
 def test_a_capture_that_left_the_board_armed_is_not_disturbed(tmp_path):
     radar = SelfTriggerRadar(_raw_dump())
     monitor = _started(tmp_path, radar)
