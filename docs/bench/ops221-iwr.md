@@ -373,6 +373,43 @@ stationary check, confirm actual camera captures and phone BLE connection,
 then check several separated real shots against TrackMan for detection,
 sensor association and measurements. No TrackMan acceptance is claimed.
 
+## October 17: upstream PA re-arm backport
+
+Backported the trigger fix from upstream PR #221, commit
+`c4715a469504f6fe19f5f5b1a5e000b907870ca7`. Completed OPS dumps now
+re-arm with `PA`, keeping firmware 1.3.2 detector settings intact. Orphaned
+dump tails are detected and re-armed instead of leaving the board idle.
+The bench branch retains its immediate UART reads, pending-input option,
+independent OPS/IWR triggers and clock queries before re-arm. No firmware,
+calibration, sensitivity or launcher settings changed.
+
+Windows development validation:
+
+- Driver, rolling-buffer and independent-trigger suites: 242 passed.
+  Eight focused assertions failed before the port and pass afterward.
+- Related UART, re-arm, mode-command, serial-deadlock, server, IWR monitor
+  and kiosk suites: 504 passed, 46 skipped, one failed. The calibration-path
+  assertion compares Windows backslashes with forward slashes; it also
+  fails on a clean archive of unchanged `db22835`. Linux kiosk tests skip
+  on Windows; no Pi acceptance is claimed.
+- Changed-file Ruff lint passed; Pylint for both implementation files:
+  9.84/10. Ruff formatting differences in `ops243.py` and `test_ops243.py`
+  also exist on unchanged `db22835`; the other changed Python files pass.
+
+Cormac's current `feat/iwr-calcs`, `109c259`, adds the swing zone to
+replay and the dump viewer. Its commit and azimuth-check guide explicitly
+state that the board trigger does not call it yet and the starting zone
+limits require bench calibration. That tooling was not pulled into this
+range update; it would not change live triggering.
+
+Pull this branch with `git pull --ff-only origin bench/ops221-iwr-2026-10-09`
+from the existing Pi checkout, then restart the existing kiosk launcher.
+Keep the prepared October 10 flags, including the no-debug setting.
+No reflash is needed. Before shots, repeat rapid-motion OPS re-arming and
+the quiet-idle check; look for `Internal speed trigger re-armed (PA)`.
+Codex adapted the upstream port and ran the checks above. Hardware retesting
+of this backport remains pending.
+
 ## Hardware and fallback
 
 - Target: Pi 5, OPS243-A firmware 1.3.2 on `/dev/ttyAMA0` at 230400 baud,

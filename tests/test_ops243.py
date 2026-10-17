@@ -834,10 +834,44 @@ class _ImmediateTriggerSerial(_InternalTriggerSerial):
         return result
 
     def write(self, data):
-        if data == b"ST-25\r":
+        if data in (b"ST-25\r", b"PA"):
             self.pending.extend(b'{"trigger_velocity":-25}\r\n')
             self.pending.extend(b"".join(TestWaitForHardwareTrigger._DUMP))
         return super().write(data)
+
+
+class _ArmingDumpSerial(_InternalTriggerSerial):
+    """Model a board that starts a dump the moment it is armed.
+
+    Motion in front of the radar fires the internal trigger as soon as the
+    board is live: the real ``ST`` threshold at startup, ``PA`` on re-arm. Like pyserial,
+    ``reset_input_buffer`` drops anything already received, so clearing input
+    after arming loses the head of that dump.
+    """
+
+    def __init__(self, dump, arming_write=b"ST-25\r"):
+        super().__init__()
+        self._dump = dump
+        self._arming_write = arming_write
+        self._pending = bytearray()
+
+    @property
+    def in_waiting(self):
+        return len(self._pending)
+
+    def read(self, n):
+        chunk = bytes(self._pending[:n])
+        del self._pending[:n]
+        return chunk
+
+    def reset_input_buffer(self):
+        self._pending.clear()
+
+    def write(self, data):
+        written = super().write(data)
+        if data == self._arming_write:
+            self._pending.extend(self._dump)
+        return written
 
 
 class TestInternalSpeedTrigger:
@@ -1009,8 +1043,12 @@ class TestInternalSpeedTrigger:
 
         assert radar.validate_internal_trigger_firmware() == version
 
-    def test_rearm_uses_gc_and_restores_cached_settings(self, monkeypatch):
-        """A completed dump is re-armed with GC without PA or S#0."""
+    def test_rearm_sends_only_pa_and_keeps_detector_settings(self, monkeypatch):
+        """Firmware 1.3.2 idles after a dump with its settings intact; PA resumes it.
+
+        GC would reset every detector setting and reopen a window in which
+        motion fires an unguarded trigger mid-rebuild, so re-arm must not use it.
+        """
         radar = self._radar(_InternalTriggerSerial())
         radar._internal_speed_trigger_config = (25.0, 6, 40, 30)
         commands = []
@@ -1023,28 +1061,16 @@ class TestInternalSpeedTrigger:
         )
 
         assert radar.rearm_internal_speed_trigger() is True
-        assert radar.serial.writes == [
-            b"ST-90\r",
-            b"GC",
-            b"ST-90\r",
-            b"ST-200\r",
-            b"SM40\r",
-            b"ST-25\r",
-        ]
-        assert commands == [
-            "S=30",
-            "US",
-            "P0",
-            "S(",
-            "X=2",
-            "R-",
-            "R>25",
-            "OJ",
-            "OM",
-            "W0",
-            "S#6",
-        ]
-        assert not {"PI", "GS", "PA", "S#0"} & set(commands)
+        assert radar.serial.writes == [b"PA"]
+        assert commands == []
+
+    def test_rearm_requires_prior_configuration(self):
+        """PA only resumes a board that configure_for_internal_speed_trigger set up."""
+        radar = self._radar(_InternalTriggerSerial())
+        radar._internal_speed_trigger_config = None
+
+        with pytest.raises(RuntimeError, match="has not been configured"):
+            radar.rearm_internal_speed_trigger()
 
     def test_rearm_recovers_from_serial_timeout_without_discarding_capture(self, monkeypatch):
         """A busy radar reports a retryable re-arm failure instead of raising."""
@@ -1073,3 +1099,71 @@ class TestInternalSpeedTrigger:
 
         assert response == b"".join(TestWaitForHardwareTrigger._DUMP).decode("ascii")
         assert radar._hardware_trigger_recovery_required is False
+
+    def test_dump_starting_right_after_rearm_reaches_next_wait(self, monkeypatch):
+        """Motion right after re-arm must not have its dump discarded.
+
+        Regression: on firmware 1.3.2 a hand wave within ~0.1s of re-arm
+        fired the trigger, the final reset_input_buffer dropped the dump
+        head, the wait loop never saw a capture marker, and the board sat
+        idle after the dump with nothing left to re-arm it.
+        """
+        dump = b"".join(TestWaitForHardwareTrigger._DUMP)
+        radar = self._radar(_ArmingDumpSerial(dump, arming_write=b"PA"))
+        radar._internal_speed_trigger_config = (25.0, 6, 40, 30)
+        monkeypatch.setattr(radar, "_drain_rearm_serial", lambda: None)
+        monkeypatch.setattr(radar, "_send_command", lambda _command: "")
+
+        assert radar.rearm_internal_speed_trigger() is True
+        response = radar.wait_for_hardware_trigger(timeout=1.0, preserve_pending=True)
+
+        assert response == dump.decode("ascii")
+
+    def test_dump_starting_right_after_initial_arm_reaches_first_wait(self, monkeypatch):
+        """The startup arm has the same window as re-arm and must keep the dump."""
+        dump = b"".join(TestWaitForHardwareTrigger._DUMP)
+        radar = self._radar(_ArmingDumpSerial(dump))
+        monkeypatch.setattr(
+            radar,
+            "_send_command",
+            lambda command: '{"Version":"1.3.2"}' if command == "?V" else "",
+        )
+
+        radar.configure_for_internal_speed_trigger(trigger_threshold_mph=25)
+        response = radar.wait_for_hardware_trigger(timeout=1.0, preserve_pending=True)
+
+        assert response == dump.decode("ascii")
+
+    def test_orphaned_dump_tail_is_reported_without_waiting_for_timeout(self):
+        """A dump whose head was lost leaves the board idle; report it promptly."""
+        tail = b"1789,1763,1742]}\r\n" + TestWaitForHardwareTrigger._DUMP[2]
+        radar = self._radar(_ScheduledSerial([(0.05, tail)]))
+
+        started = time.time()
+        response = radar.wait_for_hardware_trigger(timeout=5.0, detect_orphaned_dump=True)
+
+        assert response == ""
+        assert radar.last_hardware_trigger_orphaned_dump is True
+        assert time.time() - started < 2.0
+
+    def test_non_dump_output_is_not_reported_as_orphaned_dump(self):
+        """Command replies and speed records without a Q array are ignored."""
+        chatter = b'{"WindowFunction" : "Generated Hann Window"}\r\n{"speed":-12.0}\r\n'
+        radar = self._radar(_ScheduledSerial([(0.05, chatter)]))
+
+        response = radar.wait_for_hardware_trigger(timeout=0.3, detect_orphaned_dump=True)
+
+        assert response == ""
+        assert radar.last_hardware_trigger_orphaned_dump is False
+
+    def test_orphaned_dump_detection_is_opt_in(self):
+        """Without opting in, the sound path keeps waiting out its timeout."""
+        tail = b"1789,1763,1742]}\r\n" + TestWaitForHardwareTrigger._DUMP[2]
+        radar = self._radar(_ScheduledSerial([(0.05, tail)]))
+
+        started = time.time()
+        response = radar.wait_for_hardware_trigger(timeout=0.6)
+
+        assert response == ""
+        assert radar.last_hardware_trigger_orphaned_dump is False
+        assert time.time() - started >= 0.6

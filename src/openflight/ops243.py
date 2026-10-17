@@ -93,6 +93,7 @@ def set_show_raw_readings(enabled: bool):
 
 _CLOCK_RE = re.compile(r'"?Clock"?\s*:\s*"?(-?\d+(?:\.\d+)?)"?')
 _OPS243_FIRMWARE_RE = re.compile(r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")
+_ORPHANED_DUMP_MARKER = b'{"Q"'
 
 
 def _parse_ops_clock(response: str) -> Optional[float]:
@@ -242,6 +243,7 @@ class OPS243Radar:
         self._internal_speed_trigger_config = None
         self._hardware_trigger_recovery_required = False
         self.last_hardware_trigger_first_byte_timestamp: Optional[float] = None
+        self.last_hardware_trigger_orphaned_dump = False
         # Most recent OPS-clock -> host-epoch sync (see read_clock_sync).
         self.last_clock_sync: Optional[dict] = None
 
@@ -1544,6 +1546,7 @@ class OPS243Radar:
         cancel_event: Optional[threading.Event] = None,
         on_first_byte: Optional[Callable[[], None]] = None,
         preserve_pending: bool = False,
+        detect_orphaned_dump: bool = False,
     ) -> str:
         """
         Wait for hardware trigger to fire and read the buffer dump.
@@ -1563,6 +1566,8 @@ class OPS243Radar:
                 dump has started, it is allowed to finish normally.
             on_first_byte: Called once when a hardware-triggered dump begins.
             preserve_pending: Keep bytes already queued by an autonomous trigger.
+            detect_orphaned_dump: Report a Q array arriving without a capture
+                marker through last_hardware_trigger_orphaned_dump.
 
         Returns:
             Raw response string containing JSON lines, or empty string on timeout
@@ -1573,6 +1578,7 @@ class OPS243Radar:
         if dump_grace is None:
             dump_grace = self.transfer_budget_s(floor=8.0)
 
+        self.last_hardware_trigger_orphaned_dump = False
         if not preserve_pending:
             self.serial.reset_input_buffer()
 
@@ -1586,6 +1592,7 @@ class OPS243Radar:
         self.last_hardware_trigger_first_byte_timestamp = None
         recovery_required = bool(getattr(self, "_hardware_trigger_recovery_required", False))
         capture_started = False
+        orphan_last_data_time = None
         if recovery_required:
             logger.info(
                 "[OPS] Re-arm recovery: discarding trailing output until a fresh capture starts"
@@ -1601,6 +1608,10 @@ class OPS243Radar:
                     marker_offsets = [idle_bytes.find(marker) for marker in capture_markers]
                     marker_offsets = [offset for offset in marker_offsets if offset >= 0]
                     if not marker_offsets:
+                        if detect_orphaned_dump and (
+                            orphan_last_data_time is not None or _ORPHANED_DUMP_MARKER in idle_bytes
+                        ):
+                            orphan_last_data_time = time.time()
                         # Preserve enough trailing bytes to recognize a marker split
                         # across reads, while discarding unsolicited CLI/clock noise.
                         max_marker = max(len(marker) for marker in capture_markers)
@@ -1653,6 +1664,13 @@ class OPS243Radar:
                 if cancel_event is not None and cancel_event.is_set() and last_data_time is None:
                     logger.info("[OPS] Hardware trigger wait cancelled before capture")
                     break
+                if orphan_last_data_time and (time.time() - orphan_last_data_time) > 0.5:
+                    self.last_hardware_trigger_orphaned_dump = True
+                    logger.warning(
+                        "[OPS] Hardware trigger: received the tail of a dump whose start "
+                        "was discarded; the board is idle until re-armed"
+                    )
+                    break
                 # If we've started receiving data, use shorter timeout
                 if last_data_time and (time.time() - last_data_time) > 0.5:
                     full_response = "".join(response_lines)
@@ -1662,10 +1680,10 @@ class OPS243Radar:
 
         full_response = "".join(response_lines) if capture_started else ""
 
-        if not full_response:
+        if not full_response and not self.last_hardware_trigger_orphaned_dump:
             # Debug: the trigger strategy reports the timeout itself.
             logger.debug("[OPS] Hardware trigger: no data received within %.0fs", timeout)
-        else:
+        elif full_response:
             logger.info(
                 "[OPS] Hardware trigger: %d bytes in %.1fs",
                 len(full_response),
@@ -1768,7 +1786,7 @@ class OPS243Radar:
 
         The internal trigger returns a complete I/Q dump without an ``S!``
         command.  A few firmware versions can still have a short tail in the
-        UART buffer when the Q array is complete, so GC must wait for a quiet
+        UART buffer when the Q array is complete, so PA must wait for a quiet
         gap before it is sent.  The wait is bounded by the same dump budget
         used by the ordinary re-arm path.
         """
@@ -1905,10 +1923,11 @@ class OPS243Radar:
     def rearm_internal_speed_trigger(self, sample_rate_ksps: int = 30) -> bool:
         """Re-arm an internal hardware trigger after a completed dump.
 
-        GC restarts the rolling buffer but also restores firmware defaults, so
-        the cached detector settings are applied again.  A serial write timeout
-        is recoverable: the capture is valid and the next cycle can retry the
-        GC sequence.
+        Firmware 1.3.2 idles after a dump with detector settings intact.
+        PA resumes sampling; GC would reset the settings and allow a trigger
+        during their rebuild. Return directly to reading after PA so an
+        immediate dump cannot fill the UART while the host sleeps.
+        A serial write timeout retains the capture for the next recovery cycle.
         """
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Not connected to radar")
@@ -1920,12 +1939,8 @@ class OPS243Radar:
         try:
             self._drain_rearm_serial()
             self.serial.reset_input_buffer()
-            self._send_internal_trigger_threshold(self.INTERNAL_TRIGGER_GUARD_THRESHOLD)
-            self.serial.write(b"GC")
+            self.serial.write(b"PA")
             self.serial.flush()
-            time.sleep(0.15)
-            self._send_internal_trigger_threshold(self.INTERNAL_TRIGGER_GUARD_THRESHOLD)
-            self._restore_internal_speed_trigger_settings()
         except serial.SerialTimeoutException as error:
             self._hardware_trigger_recovery_required = True
             logger.warning(
@@ -1935,7 +1950,7 @@ class OPS243Radar:
             )
             return False
 
-        logger.info("[OPS] Internal speed trigger re-armed (GC)")
+        logger.info("[OPS] Internal speed trigger re-armed (PA)")
         return True
 
     def configure_for_rolling_buffer(

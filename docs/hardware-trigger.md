@@ -29,7 +29,13 @@ The host configures the radar once and then waits for the radar’s completed ro
    and the configured `S#n` split.
 5. Restore the magnitude gate `SMn` and allow the 4,096-sample history to fill while the temporary threshold guard remains active. Restore the requested `ST-n` last, then read without clearing pending bytes or adding a post-arm delay.
 6. Wait for the board-triggered dump, parse the I/Q payload, and reject it if it has no outbound ball-speed reading at or above 35 mph.
-7. Re-arm with the same temporary guard around `GC`, restore the cached settings, and wait for the buffer to fill again. A serial write timeout keeps the capture and reports a retryable re-arm failure instead of discarding the shot.
+7. Re-arm with `PA`. Firmware 1.3.2 keeps detector settings intact after a
+   dump; `GC` would reset them and allow a trigger during their rebuild.
+   Return directly to reading without clearing input or adding a post-arm
+   delay, preserving captures that start immediately. A serial write timeout
+   retains the capture and reports a retryable re-arm failure.
+8. If a `Q` array arrives without a capture marker, drain the orphaned tail
+   and re-arm the idle board. Session diagnostics record `orphaned_dump`.
 
 The implementation is intentionally limited to the OPS243 trigger path; the
 experimental analysis and UI work remain outside this focused change.
@@ -73,10 +79,18 @@ The internal trigger does not depend on the SEN-14262 sound edge. Existing sound
 
 Before treating a PR as ready for merge, run the hardware path on the target Pi and record the observations in the PR body:
 
+```bash
+scripts/start-kiosk.sh --trigger hardware
+```
+
+- Check representative ball strikes, practice swings and idle false triggers.
+- Wave repeatedly for 15–20 seconds and confirm successive dumps re-arm.
+  A blue LED that stays lit indicates the board is idle.
+
 Also run the unchanged sound path with the same representative shots:
 
 ```bash
 scripts/start-kiosk.sh --trigger sound
 ```
 
-I was unable to regression test the sound trigger.
+Record sound-trigger hardware results separately from automated tests.
