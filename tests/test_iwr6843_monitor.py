@@ -1748,6 +1748,41 @@ def test_a_capture_that_left_the_board_armed_is_not_disturbed(tmp_path):
     monitor.stop()
 
 
+def test_full_debug_dumps_retry_the_release_after_a_stale_latch_timeout(tmp_path, caplog):
+    radar = SelfTriggerRadar(_raw_dump())
+    radar.result = SimpleNamespace(shot_id=1, verdict="valid", club_points=4, ball_points=9)
+    attempts = []
+
+    def stale_release():
+        attempts.append("l3release")
+        if len(attempts) % 2:
+            raise RuntimeError("Error: self-trigger freeze timed out")
+        radar.releases += 1
+
+    radar.release_sparse_freeze = stale_release
+    monitor = _started(tmp_path, radar, full_capture=True, save_dumps=True)
+    restarted = []
+    monitor.add_restart_hook(restarted.append)
+    try:
+        with caplog.at_level(logging.WARNING):
+            for cycle in (1, 2):
+                time.sleep(0.11)
+                radar.stats_replies = ["frames=10 active=1\ntrig latched=1 enabled=1\nDone\n"]
+                capture = _self_triggered_capture(monitor, radar)
+                assert capture is not None and capture.valid
+                assert capture.path.read_bytes() == radar.raw
+                assert capture.onboard_result is radar.result
+                assert _wait_until(lambda: radar.releases == cycle)
+                assert _wait_until(lambda: not monitor._rearming)
+        assert attempts == ["l3release"] * 4
+        assert restarted == []
+        assert len(radar.configs) == 1
+        assert len(list((tmp_path / "dumps").glob("*.l3dump"))) == 2
+        assert not any("freeze timed out" in r.getMessage() for r in caplog.records)
+    finally:
+        monitor.stop()
+
+
 def test_unreadable_stats_count_as_not_armed(tmp_path):
     radar = SelfTriggerRadar(_raw_dump())
     radar.stats_replies = [RuntimeError("serial timeout")]
@@ -1757,6 +1792,35 @@ def test_unreadable_stats_count_as_not_armed(tmp_path):
 
     assert _wait_until(lambda: radar.releases == 1)
     monitor.stop()
+
+
+@pytest.mark.parametrize(
+    ("full_capture", "self_trigger", "message", "expected_attempts"),
+    [
+        (True, True, "self-trigger freeze timed out", 2),
+        (False, True, "self-trigger freeze timed out", 1),
+        (True, False, "self-trigger freeze timed out", 1),
+        (True, True, "serial timeout", 1),
+    ],
+)
+def test_release_retry_is_bounded_and_specific_to_full_self_trigger_dumps(
+    tmp_path, full_capture, self_trigger, message, expected_attempts
+):
+    radar = SelfTriggerRadar(_raw_dump())
+    monitor = _started(tmp_path, radar, full_capture=full_capture, self_trigger=self_trigger)
+    attempts = []
+
+    def failed_release():
+        attempts.append("l3release")
+        raise RuntimeError(message)
+
+    radar.release_sparse_freeze = failed_release
+    try:
+        monitor._rearm()
+        assert len(attempts) == expected_attempts
+        assert len(radar.configs) == 2
+    finally:
+        monitor.stop()
 
 
 def test_a_failing_restart_is_retried_until_the_board_runs(tmp_path, monkeypatch):

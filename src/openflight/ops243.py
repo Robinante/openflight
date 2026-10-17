@@ -1684,6 +1684,7 @@ class OPS243Radar:
             # Debug: the trigger strategy reports the timeout itself.
             logger.debug("[OPS] Hardware trigger: no data received within %.0fs", timeout)
         elif full_response:
+            raw_logger.debug("%s", full_response)
             logger.info(
                 "[OPS] Hardware trigger: %d bytes in %.1fs",
                 len(full_response),

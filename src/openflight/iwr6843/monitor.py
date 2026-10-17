@@ -695,15 +695,28 @@ class IWR6843CaptureMonitor:
         then failed leaves behind; only a restart runs that board again.
         Raises when the restart fails.
         """
-        try:
-            self.radar.release_sparse_freeze()
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.warning("[IWR6843] l3release refused (%s): restarting the radar", exc)
-        else:
-            if self._board_armed():
-                logger.info("[IWR6843] Rearmed after the capture (l3release)")
-                return
-            logger.warning("[IWR6843] Still not armed after l3release: restarting the radar")
+        for attempt in range(2):
+            try:
+                self.radar.release_sparse_freeze()
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                if (
+                    attempt == 0
+                    and self.full_capture
+                    and self.watch_self_trigger
+                    and "self-trigger freeze timed out" in str(exc)
+                ):
+                    # Older l3dump restarts the ring with its trigger latch set.
+                    # This exact firmware error clears the latch; a second
+                    # release can now stop the running ring at a frame boundary.
+                    logger.info("[IWR6843] Full-dump trigger latch cleared; retrying l3release")
+                    continue
+                logger.warning("[IWR6843] l3release refused (%s): restarting the radar", exc)
+            else:
+                if self._board_armed():
+                    logger.info("[IWR6843] Rearmed after the capture (l3release)")
+                    return
+                logger.warning("[IWR6843] Still not armed after l3release: restarting the radar")
+            break
         self._restart_radar()
 
     def _ensure_armed(self) -> None:

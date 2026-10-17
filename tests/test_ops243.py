@@ -1,6 +1,7 @@
 """Tests for OPS243 radar driver."""
 
 import inspect
+import logging
 import threading
 import time
 
@@ -603,6 +604,13 @@ class TestWaitForHardwareTrigger:
 
     # A complete dump ends with a closed Q array — the loop's completeness
     # check requires '"Q"' followed by ']}'.
+    def test_raw_dump_is_logged_before_shot_acceptance(self, caplog):
+        response = b"".join(self._DUMP)
+        radar = self._radar(_ScheduledSerial([(0.0, response)]))
+        with caplog.at_level(logging.DEBUG, logger="ops243.raw"):
+            assert radar.wait_for_hardware_trigger(timeout=0.1) == response.decode("ascii")
+        assert response.decode("ascii") in [record.getMessage() for record in caplog.records]
+
     _DUMP = [
         b'{"sample_time":946.077}\r\n{"trigger_time":946.145}\r\n',
         b'{"I":[2168,2187,2155,2154]}\r\n',

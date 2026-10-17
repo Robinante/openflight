@@ -410,6 +410,48 @@ the quiet-idle check; look for `Internal speed trigger re-armed (PA)`.
 Codex adapted the upstream port and ran the checks above. Hardware retesting
 of this backport remains pending.
 
+## October 17: full-dump recording compatibility
+
+The installed 1.0.3 firmware's full `l3dump` restarts sampling without clearing
+`gSelfTriggerLatched`. Its next `l3release` waits for a freeze that is no longer
+pending and reports `self-trigger freeze timed out`. That exact firmware error
+clears the latch before returning. For a full self-trigger readback, the host
+now retries `l3release` once: the second command can freeze the running ring
+normally and re-arm it. Any further error retains the existing restart fallback.
+No firmware image was changed. This is a host compatibility workaround;
+hardware confirmation on the installed board is still required.
+
+OPS hardware-dump responses are now written to the existing `radar_raw_*.log`
+before shot acceptance, retaining I/Q arrays even when a capture is rejected.
+Accepted shots continue to include structured arrays in the session JSONL.
+
+Validation: the simulated IWR timeout/recovery and missing OPS raw-log
+regressions failed before these changes. Related driver, monitor, trigger
+and session suites: 431 passed. Camera/capture/replay suites: 73 passed.
+Changed-file Ruff lint passed; monitor and its tests pass formatting.
+Pylint for the two changed implementation modules: 9.93/10. No physical
+radar or camera validation was performed for this recording workaround.
+
+For recording, add `--debug` to the prepared launcher, alongside the existing
+`--camera-capture`. Keep `--iwr6843-veto-no-ball` absent so a rejected onboard
+result does not skip the raw IWR dump. This supersedes the no-debug advice
+for the earlier host version above, subject to a Pi recording check.
+OPS raw logs and session JSONL go to `~/openflight_sessions`; IWR dumps go
+to its `iwr6843` folder, and camera frame archives to `trackman/camera`
+when the existing `--session-location trackman` is used. Recording is triggered,
+not continuous: full IWR readback previously took approximately seven seconds,
+during which another IWR capture cannot be recorded. No promise of capturing
+every swing or eliminating sensor false triggers is made.
+
+When renaming `openflight-cormac` to `openflight-bench`, recreate its virtual
+environment with `/usr/bin/python3` and system site packages enabled so the
+Pi-provided Picamera2 remains accessible. Preserve the old environment until
+the rebuilt one imports `picamera2`, `cv2` and `bless` successfully. Update
+the desktop autostart's checkout path before rebooting. Renaming the separate
+workbench checkout to `radar-workbench` also requires checking its launchers.
+
+Codex implemented and verified the compatibility workaround and raw logging.
+
 ## Hardware and fallback
 
 - Target: Pi 5, OPS243-A firmware 1.3.2 on `/dev/ttyAMA0` at 230400 baud,
