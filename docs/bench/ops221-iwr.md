@@ -452,6 +452,26 @@ workbench checkout to `radar-workbench` also requires checking its launchers.
 
 Codex implemented and verified the compatibility workaround and raw logging.
 
+## October 17: reversed LIS3DH mounting
+
+The user read WHO_AM_I `0x33` at I2C bus 1, address `0x18`. A marked
+front-edge-up tilt moved Y from approximately zero to -0.28 g, producing
+about -16 degrees; returning level restored approximately zero pitch.
+This confirms a working sensor with a reversed mounting direction.
+
+Use `--inclinometer --inclinometer-pitch-sign -1` for this enclosure. The
+default sign remains +1 for other mountings. The service retains raw pitch
+and applies `sign * raw_pitch + zero_offset` to the calibrated pitch;
+the sign is included in session configuration and per-shot provenance.
+No new zero offset or physical sensor change was made. The old boot launcher
+did not enable the inclinometer at all.
+
+Four new sign/validation tests failed before implementation. Inclinometer,
+server and readiness suites after the change: 373 passed, one fixture skip,
+one previously confirmed Windows path assertion deselected. The sensor
+readout above is real Pi evidence; running the new sign option on the Pi
+and verifying the resulting correction remain pending.
+
 ## Hardware and fallback
 
 - Target: Pi 5, OPS243-A firmware 1.3.2 on `/dev/ttyAMA0` at 230400 baud,

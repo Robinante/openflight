@@ -1567,7 +1567,9 @@ def _iwr6843_startup_recovery(error: object) -> str:
     return "Check the TI radar USB and power connections, then relaunch OpenFlight."
 
 
-def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: int = 0x18) -> bool:
+def init_inclinometer(
+    *, zero_offset_deg: float, pitch_sign: int = 1, bus_number: int = 1, address: int = 0x18
+) -> bool:
     """Start the optional LIS3DH service without risking radar availability."""
     global inclinometer_service  # pylint: disable=global-statement
     global inclinometer_runtime_config  # pylint: disable=global-statement
@@ -1579,6 +1581,7 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
         service = InclinometerService(
             LIS3DH(bus_number=bus_number, address=address),
             zero_offset_deg=zero_offset_deg,
+            pitch_sign=pitch_sign,
         )
         service.start()
         startup = service.wait_for_stable(timeout_s=2.0)
@@ -1590,6 +1593,7 @@ def init_inclinometer(*, zero_offset_deg: float, bus_number: int = 1, address: i
             "i2c_address": f"0x{address:02x}",
             "sample_hz": service.sample_hz,
             "zero_offset_deg": zero_offset_deg,
+            "pitch_sign": pitch_sign,
             "startup": startup.to_dict(),
         }
         if startup.snapshot is None:
@@ -2788,6 +2792,7 @@ def _snapshot_inclinometer_for_shot(shot: Shot) -> None:
     selection = inclinometer_service.snapshot_for_impact(impact_timestamp)
     data = selection.to_dict()
     data["zero_offset_deg"] = inclinometer_runtime_config.get("zero_offset_deg", 0.0)
+    data["pitch_sign"] = inclinometer_runtime_config.get("pitch_sign", 1)
     snapshot = selection.snapshot
     if snapshot is not None and iwr6843_runtime is not None:
         configured_tilt = math.degrees(iwr6843_runtime.calibration.tilt_rad)
@@ -5485,7 +5490,14 @@ def main():
         "--inclinometer-zero-offset",
         type=float,
         default=0.0,
-        help="Degrees added to raw LIS3DH pitch (default: 0)",
+        help="Degrees added after the LIS3DH pitch sign is applied (default: 0)",
+    )
+    parser.add_argument(
+        "--inclinometer-pitch-sign",
+        type=int,
+        choices=(-1, 1),
+        default=1,
+        help="Use -1 when the sensor mounting reverses enclosure pitch (default: 1)",
     )
     parser.add_argument(
         "--iwr6843-port", default=None, help="TI serial port (auto-detect by default)"
@@ -6059,7 +6071,9 @@ def main():
 
     if args.inclinometer:
         startup_status.start("inclinometer", "Connecting inclinometer")
-        if not init_inclinometer(zero_offset_deg=args.inclinometer_zero_offset):
+        if not init_inclinometer(
+            zero_offset_deg=args.inclinometer_zero_offset, pitch_sign=args.inclinometer_pitch_sign
+        ):
             print("WARNING: Inclinometer unavailable; continuing with configured IWR6843 tilt")
             startup_status.skip("inclinometer", "Inclinometer unavailable; continuing")
         else:

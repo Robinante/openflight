@@ -62,6 +62,23 @@ def test_lis3dh_rejects_wrong_identity():
         sensor.initialize()
 
 
+def test_reversed_mounting_keeps_raw_pitch_and_corrects_the_calibrated_sign():
+    sensor = LIS3DH(bus=FakeBus(axes=(0.019, -0.28, 1.0)))
+    service = InclinometerService(sensor, pitch_sign=-1, zero_offset_deg=1.0)
+    snapshot = None
+    for index in range(8):
+        snapshot = service.add_sample(sensor.read(timestamp=float(index)))
+    assert snapshot is not None
+    assert snapshot.raw_pitch_deg == pytest.approx(-15.639, abs=0.01)
+    assert snapshot.calibrated_pitch_deg == pytest.approx(16.639, abs=0.01)
+
+
+@pytest.mark.parametrize("sign", [0, 2, -2])
+def test_inclinometer_rejects_an_invalid_pitch_sign(sign):
+    with pytest.raises(ValueError, match="pitch_sign"):
+        InclinometerService(LIS3DH(bus=FakeBus()), pitch_sign=sign)
+
+
 def test_pitch_is_positive_when_sensor_y_tilts_back():
     angle = math.radians(12.0)
     sample = AccelerationSample(1.0, 0.0, math.sin(angle), math.cos(angle))
