@@ -596,13 +596,34 @@ class SoundTrigger(TriggerStrategy):
             idle_level, "[TRIGGER] Waiting for %s (timeout=%.0fs)...", self.label.lower(), timeout
         )
 
+        # S! is issued by the IWR thread, independently of this reader. The
+        # OPS may already be dumping when we enter the wait; clearing queued
+        # bytes can discard the opening JSON marker and strand the board idle.
+        # The same protection applies to asynchronous HOST_INT triggers.
         response = radar.wait_for_hardware_trigger(
             timeout=timeout,
             cancel_event=cancel_event,
             on_first_byte=capture_started_callback,
+            discard_pending_input=False,
+            detect_orphaned_dump=True,
         )
 
         if not response:
+            if getattr(radar, "last_hardware_trigger_orphaned_dump", False):
+                # The Q-array tail proves a dump ended without a recognizable
+                # header. Only then re-arm; ordinary idle timeouts must not
+                # disrupt the rolling buffer or reset its pre-trigger history.
+                logger.warning(
+                    "[TRIGGER] %s orphaned OPS dump — re-arming after discarded header",
+                    self.label,
+                )
+                radar.rearm_rolling_buffer(self.pre_trigger_segments)
+                self._append_diagnostic(
+                    accepted=False,
+                    reason="orphaned_dump",
+                    response_bytes=0,
+                )
+                return None
             logger.log(idle_level, "[TRIGGER] %s timeout — no trigger received", self.label)
             return None
 
