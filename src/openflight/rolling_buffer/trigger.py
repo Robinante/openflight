@@ -609,7 +609,7 @@ class SoundTrigger(TriggerStrategy):
         )
 
         if not response:
-            if getattr(radar, "last_hardware_trigger_orphaned_dump", False):
+            if getattr(radar, "last_hardware_trigger_orphaned_dump", False) is True:
                 # The Q-array tail proves a dump ended without a recognizable
                 # header. Only then re-arm; ordinary idle timeouts must not
                 # disrupt the rolling buffer or reset its pre-trigger history.
