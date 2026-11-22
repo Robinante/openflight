@@ -47,8 +47,17 @@ class ScriptedRadar:
         self.last_clock_sync = None
         self.last_hardware_trigger_first_byte_timestamp = None
 
-    def wait_for_hardware_trigger(self, timeout, cancel_event=None, on_first_byte=None):
+    def wait_for_hardware_trigger(
+        self,
+        timeout,
+        cancel_event=None,
+        on_first_byte=None,
+        discard_pending_input=True,
+        detect_orphaned_dump=False,
+    ):
         self.calls.append("wait")
+        assert discard_pending_input is False
+        assert detect_orphaned_dump is True
         return self.response
 
     def rearm_rolling_buffer(self, pre_trigger_segments):
