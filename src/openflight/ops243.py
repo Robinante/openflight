@@ -1449,6 +1449,7 @@ class OPS243Radar:
             raise ConnectionError("Not connected to radar")
         self.serial.write(b"S!\r")
         self.serial.flush()
+        logger.info("[OPS] S! capture request sent (port=%s)", self.port)
 
     def trigger_capture(self, timeout: Optional[float] = None) -> str:
         """
